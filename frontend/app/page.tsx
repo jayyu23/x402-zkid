@@ -3,10 +3,17 @@
 import { usePrivy, useWallets } from '@privy-io/react-auth'
 import { useState, useEffect } from 'react'
 import { generateZKProof, verifyZKProof, ProofData } from '@/lib/zkproof'
+import { sendChat, unlockData } from '@/lib/api'
 
 interface Message {
   role: 'user' | 'assistant'
   content: string
+  hasData?: boolean
+  price?: string
+  cents?: number
+  canNegotiate?: boolean
+  unlocked?: boolean
+  data?: string
 }
 
 export default function Home() {
@@ -23,6 +30,8 @@ export default function Home() {
   const [isGeneratingProof, setIsGeneratingProof] = useState(false)
   const [proofError, setProofError] = useState<string | null>(null)
   const [isVerified, setIsVerified] = useState<boolean | null>(null)
+  const [isLoading, setIsLoading] = useState(false)
+  const [currentPrice, setCurrentPrice] = useState<{ price: string; cents: number } | null>(null)
 
   const embeddedWallet = wallets.find((w) => w.walletClientType === 'privy')
 
@@ -122,21 +131,63 @@ export default function Home() {
     URL.revokeObjectURL(url)
   }
 
-  const handleSend = () => {
-    if (!input.trim()) return
+  const handleSend = async () => {
+    if (!input.trim() || !zkProof) return
 
     const userMessage: Message = { role: 'user', content: input }
     setMessages((prev) => [...prev, userMessage])
     setInput('')
+    setIsLoading(true)
 
-    // Simulate assistant response (placeholder for Fireworks AI integration)
-    setTimeout(() => {
+    try {
+      const result = await sendChat(input, zkProof.domain)
+
       const assistantMessage: Message = {
         role: 'assistant',
-        content: `I received your message: "${input}". This is a placeholder response. The negotiation system will be connected to Fireworks AI for actual price negotiations.`,
+        content: result.response,
+        hasData: result.hasData,
+        price: result.price,
+        cents: result.cents,
+        canNegotiate: result.canNegotiate,
+        unlocked: false
       }
       setMessages((prev) => [...prev, assistantMessage])
-    }, 500)
+
+      if (result.hasData && result.price) {
+        setCurrentPrice({ price: result.price, cents: result.cents || 2 })
+      }
+    } catch (error) {
+      console.error('Chat error:', error)
+      const errorMessage: Message = {
+        role: 'assistant',
+        content: 'Error connecting to server. Please try again.'
+      }
+      setMessages((prev) => [...prev, errorMessage])
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handlePay = async (messageIndex: number) => {
+    if (!zkProof || !currentPrice) return
+
+    setIsLoading(true)
+    try {
+      const result = await unlockData(zkProof.domain, currentPrice.cents)
+
+      if (result.success) {
+        setMessages((prev) => prev.map((msg, i) =>
+          i === messageIndex
+            ? { ...msg, unlocked: true, data: result.data }
+            : msg
+        ))
+        setCurrentPrice(null)
+      }
+    } catch (error) {
+      console.error('Payment error:', error)
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   if (!ready) {
@@ -256,20 +307,59 @@ export default function Home() {
                 msg.role === 'user' ? 'message-user' : 'message-assistant'
               }`}
             >
-              {msg.content}
+              <div>{msg.content}</div>
+              {msg.hasData && msg.role === 'assistant' && (
+                <div className="data-actions" style={{ marginTop: '1rem', padding: '1rem', background: 'rgba(255,255,255,0.05)', borderRadius: '8px' }}>
+                  {msg.unlocked ? (
+                    <div>
+                      <div style={{ color: '#10b981', marginBottom: '0.5rem' }}>Unlocked!</div>
+                      <div style={{ fontFamily: 'monospace', background: '#000', padding: '1rem', borderRadius: '4px' }}>
+                        {msg.data}
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <button
+                        className="btn btn-secondary"
+                        disabled
+                        style={{ opacity: 0.5 }}
+                      >
+                        Download (Locked)
+                      </button>
+                      <button
+                        className="btn btn-primary"
+                        onClick={() => handlePay(i)}
+                        disabled={isLoading}
+                      >
+                        {isLoading ? 'Processing...' : `Pay ${msg.price} to Unlock`}
+                      </button>
+                      {msg.canNegotiate && (
+                        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                          (You can negotiate!)
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>
         <div className="input-container">
           <input
             type="text"
-            placeholder="Start negotiating..."
+            placeholder="Chat or ask for data..."
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+            onKeyDown={(e) => e.key === 'Enter' && !isLoading && handleSend()}
+            disabled={isLoading}
           />
-          <button className="btn btn-primary" onClick={handleSend}>
-            Send
+          <button
+            className="btn btn-primary"
+            onClick={handleSend}
+            disabled={isLoading || !zkProof}
+          >
+            {isLoading ? '...' : 'Send'}
           </button>
         </div>
       </div>
