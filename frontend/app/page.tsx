@@ -1,9 +1,9 @@
 'use client'
 
 import { usePrivy, useWallets } from '@privy-io/react-auth'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { generateZKProof, verifyZKProof, ProofData } from '@/lib/zkproof'
-import { sendChat, unlockData } from '@/lib/api'
+import { sendChatStream, unlockData } from '@/lib/api'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -14,17 +14,13 @@ interface Message {
   canNegotiate?: boolean
   unlocked?: boolean
   data?: string
+  isStreaming?: boolean
 }
 
 export default function Home() {
   const { ready, authenticated, user, login, logout, getAccessToken } = usePrivy()
   const { wallets } = useWallets()
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      role: 'assistant',
-      content: 'Welcome to x402 ZKID! You are now authenticated. Your identity has been verified and bound to your wallet. You can download your ZK proof above, or start negotiating below.',
-    },
-  ])
+  const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [zkProof, setZkProof] = useState<ProofData | null>(null)
   const [isGeneratingProof, setIsGeneratingProof] = useState(false)
@@ -32,8 +28,17 @@ export default function Home() {
   const [isVerified, setIsVerified] = useState<boolean | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [currentPrice, setCurrentPrice] = useState<{ price: string; cents: number } | null>(null)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const embeddedWallet = wallets.find((w) => w.walletClientType === 'privy')
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }
+
+  useEffect(() => {
+    scrollToBottom()
+  }, [messages])
 
   useEffect(() => {
     if (authenticated && user && embeddedWallet?.address) {
@@ -54,7 +59,6 @@ export default function Home() {
         throw new Error('Failed to get access token')
       }
 
-      // Decode JWT to extract claims
       const parts = accessToken.split('.')
       if (parts.length !== 3) {
         throw new Error('Invalid JWT format')
@@ -62,14 +66,12 @@ export default function Home() {
 
       const payload = JSON.parse(atob(parts[1]))
 
-      // Extract email from linked accounts
       const googleAccount = user.linkedAccounts?.find(
         (account) => account.type === 'google_oauth'
       )
       const email = googleAccount?.email || user.email?.address || null
       const domain = email ? email.split('@')[1] : 'unknown'
 
-      // Generate real ZK proof using snarkjs
       const proof = await generateZKProof(
         domain,
         embeddedWallet.address,
@@ -78,18 +80,14 @@ export default function Home() {
 
       setZkProof(proof)
 
-      // Verify the proof
       const verified = await verifyZKProof(proof)
       setIsVerified(verified)
-      console.log('Proof verification result:', verified)
-
     } catch (error) {
       console.error('Failed to generate proof:', error)
       setProofError(
         error instanceof Error ? error.message : 'Failed to generate proof'
       )
 
-      // Check if it's a missing circuit files error
       if (error instanceof Error && error.message.includes('fetch')) {
         setProofError(
           'Circuit files not found. Please run: cd circuits && pnpm install && pnpm build'
@@ -116,53 +114,73 @@ export default function Home() {
     URL.revokeObjectURL(url)
   }
 
-  const downloadRawJwt = async () => {
-    const accessToken = await getAccessToken()
-    if (!accessToken) return
-
-    const blob = new Blob([accessToken], { type: 'text/plain' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `privy-jwt-${Date.now()}.txt`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-  }
-
   const handleSend = async () => {
-    if (!input.trim() || !zkProof) return
+    if (!input.trim() || !zkProof || isLoading) return
 
     const userMessage: Message = { role: 'user', content: input }
     setMessages((prev) => [...prev, userMessage])
     setInput('')
     setIsLoading(true)
 
+    // Add empty assistant message for streaming
+    const assistantMessage: Message = {
+      role: 'assistant',
+      content: '',
+      isStreaming: true
+    }
+    setMessages((prev) => [...prev, assistantMessage])
+
     try {
-      const result = await sendChat(input, zkProof.domain)
+      let streamedContent = ''
+      let dataInfo: { hasData?: boolean; price?: string; cents?: number; canNegotiate?: boolean } = {}
 
-      const assistantMessage: Message = {
-        role: 'assistant',
-        content: result.response,
-        hasData: result.hasData,
-        price: result.price,
-        cents: result.cents,
-        canNegotiate: result.canNegotiate,
-        unlocked: false
-      }
-      setMessages((prev) => [...prev, assistantMessage])
-
-      if (result.hasData && result.price) {
-        setCurrentPrice({ price: result.price, cents: result.cents || 2 })
-      }
+      await sendChatStream(input, zkProof.domain, (chunk) => {
+        if (chunk.done) {
+          setMessages((prev) =>
+            prev.map((msg, i) =>
+              i === prev.length - 1
+                ? {
+                    ...msg,
+                    isStreaming: false,
+                    hasData: dataInfo.hasData,
+                    price: dataInfo.price,
+                    cents: dataInfo.cents,
+                    canNegotiate: dataInfo.canNegotiate
+                  }
+                : msg
+            )
+          )
+          if (dataInfo.hasData && dataInfo.price) {
+            setCurrentPrice({ price: dataInfo.price, cents: dataInfo.cents || 2 })
+          }
+        } else if (chunk.text) {
+          streamedContent += chunk.text
+          if (chunk.hasData) {
+            dataInfo = {
+              hasData: chunk.hasData,
+              price: chunk.price,
+              cents: chunk.cents,
+              canNegotiate: chunk.canNegotiate
+            }
+          }
+          setMessages((prev) =>
+            prev.map((msg, i) =>
+              i === prev.length - 1
+                ? { ...msg, content: streamedContent }
+                : msg
+            )
+          )
+        }
+      })
     } catch (error) {
       console.error('Chat error:', error)
-      const errorMessage: Message = {
-        role: 'assistant',
-        content: 'Error connecting to server. Please try again.'
-      }
-      setMessages((prev) => [...prev, errorMessage])
+      setMessages((prev) =>
+        prev.map((msg, i) =>
+          i === prev.length - 1
+            ? { ...msg, content: 'Error connecting to server. Please try again.', isStreaming: false }
+            : msg
+        )
+      )
     } finally {
       setIsLoading(false)
     }
@@ -191,20 +209,39 @@ export default function Home() {
   }
 
   if (!ready) {
-    return <div className="loading">Loading...</div>
+    return (
+      <div className="app-container">
+        <div className="loading-state">
+          <div className="loading-spinner" />
+          <span>Loading...</span>
+        </div>
+      </div>
+    )
   }
 
   if (!authenticated) {
     return (
-      <div className="login-container">
-        <h1>x402 ZKID</h1>
-        <p>
-          Authenticate with your Google account to generate a zero-knowledge proof
-          binding your identity to an embedded wallet.
-        </p>
-        <button className="btn btn-primary" onClick={login}>
-          Sign in with Google
-        </button>
+      <div className="app-container">
+        <div className="login-view">
+          <div className="login-card">
+            <div className="login-header">
+              <h1>x402</h1>
+              <span className="login-badge">ZKID</span>
+            </div>
+            <p className="login-description">
+              Authenticate with Google to generate a zero-knowledge proof binding your identity to an embedded wallet.
+            </p>
+            <button className="login-button" onClick={login}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+              </svg>
+              Continue with Google
+            </button>
+          </div>
+        </div>
       </div>
     )
   }
@@ -215,154 +252,162 @@ export default function Home() {
     'Unknown'
 
   return (
-    <div className="container">
-      <header className="header">
-        <h1>x402 ZKID</h1>
-        <div className="user-info">
-          <span className="user-email">{email}</span>
-          {embeddedWallet && (
-            <span className="wallet-address">
-              {embeddedWallet.address.slice(0, 6)}...{embeddedWallet.address.slice(-4)}
-            </span>
-          )}
-          <button className="btn btn-secondary" onClick={logout}>
-            Sign out
-          </button>
+    <div className="app-container">
+      {/* Sidebar */}
+      <aside className="sidebar">
+        <div className="sidebar-header">
+          <h1 className="logo">x402</h1>
+          <span className="logo-badge">ZKID</span>
         </div>
-      </header>
 
-      <section className="proof-section">
-        <div className="proof-header">
-          <h2>Identity Proof</h2>
-          {zkProof && !zkProof.isReal && (
-            <span className="mock-hint">demo</span>
+        {/* Identity Card */}
+        <div className="identity-card">
+          <div className="identity-header">
+            <span className="identity-label">Identity</span>
+            {isVerified && <span className="verified-badge">Verified</span>}
+          </div>
+          <div className="identity-email">{email}</div>
+          {embeddedWallet && (
+            <div className="identity-wallet">
+              {embeddedWallet.address.slice(0, 6)}...{embeddedWallet.address.slice(-4)}
+            </div>
           )}
         </div>
-        {isGeneratingProof ? (
-          <div className="proof-loading">
-            <span className="spinner"></span>
-            <div>
-              <p>Generating ZK proof...</p>
-              <p className="proof-loading-hint">This may take a few seconds</p>
+
+        {/* Proof Section */}
+        <div className="proof-card">
+          <div className="proof-label">ZK Proof</div>
+          {isGeneratingProof ? (
+            <div className="proof-generating">
+              <div className="loading-spinner small" />
+              <span>Generating...</span>
             </div>
-          </div>
-        ) : proofError ? (
-          <div className="proof-error">
-            <p>Error: {proofError}</p>
-            <button className="btn btn-secondary" onClick={generateProof}>
-              Retry
-            </button>
-          </div>
-        ) : zkProof ? (
-          <>
-            <div className="proof-info">
-              <div className="proof-item">
-                <label>Status</label>
-                <span className={`status-badge ${isVerified ? 'status-verified' : 'status-pending'}`}>
-                  {isVerified === null ? 'Verifying...' : isVerified ? 'Verified' : 'Invalid'}
-                </span>
-              </div>
-              <div className="proof-item">
-                <label>Domain</label>
-                <span>{zkProof.domain}</span>
-              </div>
-              <div className="proof-item">
-                <label>Wallet</label>
-                <span className="wallet-mono">{zkProof.walletAddress}</span>
-              </div>
-              <div className="proof-item">
-                <label>Protocol</label>
-                <span>{zkProof.proof.protocol} / {zkProof.proof.curve}</span>
-              </div>
+          ) : proofError ? (
+            <div className="proof-error-compact">
+              <span>Error</span>
+              <button onClick={generateProof}>Retry</button>
             </div>
-            <div className="proof-actions">
-              <button className="btn btn-primary" onClick={downloadProof}>
+          ) : zkProof ? (
+            <div className="proof-ready">
+              <div className="proof-meta">
+                <span className="proof-protocol">{zkProof.proof.protocol}</span>
+                {!zkProof.isReal && <span className="demo-tag">demo</span>}
+              </div>
+              <button className="download-btn" onClick={downloadProof}>
                 Download Proof
               </button>
-              <button className="btn btn-secondary" onClick={downloadRawJwt}>
-                Download JWT
-              </button>
-              <button
-                className="btn btn-generate"
-                onClick={generateProof}
-                disabled={isGeneratingProof}
-              >
-                {isGeneratingProof ? 'Generating...' : 'Regenerate'}
-              </button>
             </div>
-          </>
-        ) : (
-          <div className="proof-waiting">
-            <p>Waiting for wallet...</p>
-          </div>
-        )}
-      </section>
+          ) : (
+            <div className="proof-waiting">Waiting...</div>
+          )}
+        </div>
 
-      <div className="chat-container">
-        <div className="messages">
-          {messages.map((msg, i) => (
-            <div
-              key={i}
-              className={`message ${
-                msg.role === 'user' ? 'message-user' : 'message-assistant'
-              }`}
-            >
-              <div>{msg.content}</div>
-              {msg.hasData && msg.role === 'assistant' && (
-                <div className="data-actions" style={{ marginTop: '1rem', padding: '1rem', background: 'rgba(255,255,255,0.05)', borderRadius: '8px' }}>
-                  {msg.unlocked ? (
-                    <div>
-                      <div style={{ color: '#10b981', marginBottom: '0.5rem' }}>Unlocked!</div>
-                      <div style={{ fontFamily: 'monospace', background: '#000', padding: '1rem', borderRadius: '4px' }}>
-                        {msg.data}
-                      </div>
-                    </div>
-                  ) : (
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                      <button
-                        className="btn btn-secondary"
-                        disabled
-                        style={{ opacity: 0.5 }}
-                      >
-                        Download (Locked)
-                      </button>
-                      <button
-                        className="btn btn-primary"
-                        onClick={() => handlePay(i)}
-                        disabled={isLoading}
-                      >
-                        {isLoading ? 'Processing...' : `Pay ${msg.price} to Unlock`}
-                      </button>
-                      {msg.canNegotiate && (
-                        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                          (You can negotiate!)
-                        </span>
-                      )}
+        <div className="sidebar-spacer" />
+
+        <button className="logout-btn" onClick={logout}>
+          Sign out
+        </button>
+      </aside>
+
+      {/* Main Chat Area */}
+      <main className="chat-main">
+        <div className="messages-container">
+          {messages.length === 0 ? (
+            <div className="empty-state">
+              <div className="empty-icon">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                </svg>
+              </div>
+              <h2>Start a conversation</h2>
+              <p>Ask anything, or say &quot;give me the data&quot; to request paid content.</p>
+            </div>
+          ) : (
+            <div className="messages-list">
+              {messages.map((msg, i) => (
+                <div
+                  key={i}
+                  className={`message ${msg.role === 'user' ? 'message-user' : 'message-assistant'}`}
+                >
+                  {msg.role === 'assistant' && (
+                    <div className="message-avatar">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+                      </svg>
                     </div>
                   )}
+                  <div className="message-content">
+                    <div className="message-text">
+                      {msg.content}
+                      {msg.isStreaming && <span className="cursor" />}
+                    </div>
+                    {msg.hasData && msg.role === 'assistant' && (
+                      <div className="data-unlock-card">
+                        {msg.unlocked ? (
+                          <div className="data-unlocked">
+                            <div className="unlocked-header">
+                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <polyline points="20 6 9 17 4 12" />
+                              </svg>
+                              Unlocked
+                            </div>
+                            <div className="data-content">{msg.data}</div>
+                          </div>
+                        ) : (
+                          <div className="data-locked">
+                            <div className="locked-info">
+                              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                                <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                              </svg>
+                              <span>Data available</span>
+                            </div>
+                            <button
+                              className="pay-button"
+                              onClick={() => handlePay(i)}
+                              disabled={isLoading}
+                            >
+                              {isLoading ? 'Processing...' : `Pay ${msg.price}`}
+                            </button>
+                            {msg.canNegotiate && (
+                              <span className="negotiate-hint">Negotiable</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              )}
+              ))}
+              <div ref={messagesEndRef} />
             </div>
-          ))}
+          )}
         </div>
-        <div className="input-container">
-          <input
-            type="text"
-            placeholder="Chat or ask for data..."
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && !isLoading && handleSend()}
-            disabled={isLoading}
-          />
-          <button
-            className="btn btn-primary"
-            onClick={handleSend}
-            disabled={isLoading || !zkProof}
-          >
-            {isLoading ? '...' : 'Send'}
-          </button>
+
+        {/* Input Area */}
+        <div className="input-area">
+          <div className="input-wrapper">
+            <input
+              type="text"
+              placeholder="Type a message..."
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && !isLoading && handleSend()}
+              disabled={isLoading || !zkProof}
+            />
+            <button
+              className="send-button"
+              onClick={handleSend}
+              disabled={isLoading || !zkProof || !input.trim()}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <line x1="22" y1="2" x2="11" y2="13" />
+                <polygon points="22 2 15 22 11 13 2 9 22 2" />
+              </svg>
+            </button>
+          </div>
         </div>
-      </div>
+      </main>
     </div>
   )
 }
