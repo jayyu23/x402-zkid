@@ -9,7 +9,12 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@coinbase/cdp-sdk": "^1.43.0",
     "@privy-io/react-auth": "^2.0.0",
+    "@x402/core": "^2.2.0",
+    "@x402/evm": "^2.2.0",
+    "@x402/express": "^2.2.0",
+    "dotenv": "^17.2.3",
     "next": "^15.1.0",
     "poseidon-lite": "^0.3.0",
     "react": "^19.0.0",
