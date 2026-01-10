@@ -1,4 +1,4 @@
-.PHONY: all install dev stop frontend backend circom clean clean-circom
+.PHONY: all install dev stop frontend backend circom clean clean-circom circom-status
 
 # Default: run without circom (uses mock proofs)
 all: install dev
@@ -38,3 +38,14 @@ clean-circom:
 	rm -rf circuits/build
 	rm -rf frontend/public/zk
 	@echo "Circom artifacts cleaned. Run 'make circom' to rebuild."
+
+circom-status:
+	@if [ -f frontend/public/zk/jwt_domain_verifier.wasm ] && \
+	    [ -f frontend/public/zk/jwt_domain_verifier.zkey ] && \
+	    [ -f frontend/public/zk/verification_key.json ]; then \
+		echo "Circom: ENABLED (real proofs)"; \
+		ls -lh frontend/public/zk/; \
+	else \
+		echo "Circom: DISABLED (demo mode)"; \
+		echo "Run 'make circom' to enable real proofs."; \
+	fi
