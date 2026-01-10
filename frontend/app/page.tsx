@@ -3,7 +3,8 @@
 import { usePrivy, useWallets } from '@privy-io/react-auth'
 import { useState, useEffect, useRef } from 'react'
 import { generateZKProof, verifyZKProof, ProofData } from '@/lib/zkproof'
-import { sendChatStream, unlockData } from '@/lib/api'
+import { sendChatStream } from '@/lib/api'
+import { makePaymentRequest } from '@/lib/x402client'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -187,19 +188,33 @@ export default function Home() {
   }
 
   const handlePay = async (messageIndex: number) => {
-    if (!zkProof || !currentPrice) return
+    if (!embeddedWallet || !currentPrice) return
 
     setIsLoading(true)
     try {
-      const result = await unlockData(zkProof.domain, currentPrice.cents)
+      // Use x402 payment flow with Privy wallet
+      const result = await makePaymentRequest(embeddedWallet)
 
-      if (result.success) {
+      if (result.success && result.data) {
+        const responseData = result.data as { data?: { timestamp?: string }; message?: string }
         setMessages((prev) => prev.map((msg, i) =>
           i === messageIndex
-            ? { ...msg, unlocked: true, data: result.data }
+            ? {
+                ...msg,
+                unlocked: true,
+                data: responseData.message || JSON.stringify(responseData.data)
+              }
             : msg
         ))
         setCurrentPrice(null)
+      } else {
+        console.error('Payment failed:', result.error)
+        // Show error to user
+        setMessages((prev) => prev.map((msg, i) =>
+          i === messageIndex
+            ? { ...msg, content: msg.content + `\n\nPayment error: ${result.error}` }
+            : msg
+        ))
       }
     } catch (error) {
       console.error('Payment error:', error)
@@ -365,7 +380,7 @@ export default function Home() {
                             <button
                               className="pay-button"
                               onClick={() => handlePay(i)}
-                              disabled={isLoading}
+                              disabled={isLoading || !embeddedWallet}
                             >
                               {isLoading ? 'Processing...' : `Pay ${msg.price}`}
                             </button>
