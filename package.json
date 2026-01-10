@@ -5,8 +5,7 @@
     "dev": "concurrently --names \"frontend,backend\" -c \"cyan,magenta\" \"pnpm run dev:frontend\" \"pnpm run dev:backend\"",
     "dev:frontend": "cd frontend && pnpm run dev",
     "dev:backend": "cd backend && pnpm run dev",
-    "install:all": "pnpm install && cd frontend && pnpm install && cd ../backend && pnpm install && cd ../packages/zk-helpers && pnpm install",
-    "build:zk-helpers": "cd packages/zk-helpers && pnpm run build"
+    "install:all": "pnpm install && cd frontend && pnpm install && cd ../backend && pnpm install"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

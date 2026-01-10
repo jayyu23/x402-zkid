@@ -1,12 +1,9 @@
-.PHONY: all install dev stop frontend backend circuits clean
+.PHONY: all install dev stop frontend backend clean
 
-all: dev
+all: install dev
 
 install:
 	pnpm run install:all
-
-circuits:
-	pnpm run build:circuits
 
 dev:
 	pnpm run dev
@@ -24,5 +21,4 @@ backend:
 	cd backend && pnpm run dev
 
 clean:
-	rm -rf node_modules frontend/node_modules backend/node_modules circuits/node_modules
-	rm -rf circuits/build frontend/public/zk
+	rm -rf node_modules frontend/node_modules backend/node_modules
