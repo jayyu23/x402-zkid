@@ -1,4 +1,4 @@
-.PHONY: all install dev stop frontend backend circom clean
+.PHONY: all install dev stop frontend backend circom clean clean-circom
 
 # Default: run without circom (uses mock proofs)
 all: install dev
@@ -33,3 +33,8 @@ clean:
 	rm -rf node_modules frontend/node_modules backend/node_modules
 	rm -rf circuits/node_modules circuits/build
 	rm -rf frontend/public/zk
+
+clean-circom:
+	rm -rf circuits/build
+	rm -rf frontend/public/zk
+	@echo "Circom artifacts cleaned. Run 'make circom' to rebuild."

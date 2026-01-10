@@ -39,8 +39,11 @@ async function checkCircuitFilesExist(): Promise<boolean> {
   try {
     const wasmResponse = await fetch(`${ZK_BASE_PATH}/${CIRCUIT_NAME}.wasm`, { method: 'HEAD' })
     const zkeyResponse = await fetch(`${ZK_BASE_PATH}/${CIRCUIT_NAME}.zkey`, { method: 'HEAD' })
-    return wasmResponse.ok && zkeyResponse.ok
-  } catch {
+    const exists = wasmResponse.ok && zkeyResponse.ok
+    console.log(`Circuit files check: wasm=${wasmResponse.ok}, zkey=${zkeyResponse.ok}, using real=${exists}`)
+    return exists
+  } catch (error) {
+    console.log('Circuit files check failed:', error)
     return false
   }
 }
