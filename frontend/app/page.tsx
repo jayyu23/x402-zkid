@@ -1,9 +1,12 @@
 'use client'
 
 import { usePrivy, useWallets } from '@privy-io/react-auth'
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { generateZKProof, verifyZKProof, ProofData } from '@/lib/zkproof'
 import { sendChatStream, unlockData } from '@/lib/api'
+import { getBalances, Balances, FAUCETS } from '@/lib/balance'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -28,9 +31,38 @@ export default function Home() {
   const [isVerified, setIsVerified] = useState<boolean | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [currentPrice, setCurrentPrice] = useState<{ price: string; cents: number } | null>(null)
+  const [copied, setCopied] = useState(false)
+  const [balances, setBalances] = useState<Balances | null>(null)
+  const [showFundModal, setShowFundModal] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const embeddedWallet = wallets.find((w) => w.walletClientType === 'privy')
+
+  const copyWalletAddress = async () => {
+    if (!embeddedWallet?.address) return
+    await navigator.clipboard.writeText(embeddedWallet.address)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  const fetchBalances = useCallback(async () => {
+    if (!embeddedWallet?.address) return
+    try {
+      const bal = await getBalances(embeddedWallet.address)
+      setBalances(bal)
+    } catch (error) {
+      console.error('Failed to fetch balances:', error)
+    }
+  }, [embeddedWallet?.address])
+
+  useEffect(() => {
+    if (embeddedWallet?.address) {
+      fetchBalances()
+      // Refresh balances every 30 seconds
+      const interval = setInterval(fetchBalances, 30000)
+      return () => clearInterval(interval)
+    }
+  }, [embeddedWallet?.address, fetchBalances])
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -268,10 +300,57 @@ export default function Home() {
           </div>
           <div className="identity-email">{email}</div>
           {embeddedWallet && (
-            <div className="identity-wallet">
-              {embeddedWallet.address.slice(0, 6)}...{embeddedWallet.address.slice(-4)}
-            </div>
+            <>
+              <div className="wallet-row">
+                <div className="identity-wallet">
+                  {embeddedWallet.address.slice(0, 6)}...{embeddedWallet.address.slice(-4)}
+                </div>
+                <button className="copy-btn" onClick={copyWalletAddress} title="Copy address">
+                  {copied ? (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  ) : (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                    </svg>
+                  )}
+                </button>
+              </div>
+              <div className="chain-badge">Base Sepolia</div>
+            </>
           )}
+        </div>
+
+        {/* Balance Card */}
+        <div className="balance-card">
+          <div className="balance-header">
+            <span className="balance-label">Balance</span>
+            <button className="refresh-btn" onClick={fetchBalances} title="Refresh">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M23 4v6h-6M1 20v-6h6" />
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+              </svg>
+            </button>
+          </div>
+          {balances ? (
+            <div className="balance-amounts">
+              <div className="balance-row">
+                <span className="balance-token">ETH</span>
+                <span className="balance-value">{parseFloat(balances.eth).toFixed(4)}</span>
+              </div>
+              <div className="balance-row">
+                <span className="balance-token">USDC</span>
+                <span className="balance-value">{parseFloat(balances.usdc).toFixed(2)}</span>
+              </div>
+            </div>
+          ) : (
+            <div className="balance-loading">Loading...</div>
+          )}
+          <button className="add-funds-btn" onClick={() => setShowFundModal(true)}>
+            Add Funds
+          </button>
         </div>
 
         {/* Proof Section */}
@@ -337,9 +416,15 @@ export default function Home() {
                     </div>
                   )}
                   <div className="message-content">
-                    <div className="message-text">
-                      {msg.content}
-                      {msg.isStreaming && <span className="cursor" />}
+                    <div className="message-text markdown-content">
+                      {msg.role === 'assistant' ? (
+                        <>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                          {msg.isStreaming && <span className="cursor" />}
+                        </>
+                      ) : (
+                        msg.content
+                      )}
                     </div>
                     {msg.hasData && msg.role === 'assistant' && (
                       <div className="data-unlock-card">
@@ -408,6 +493,87 @@ export default function Home() {
           </div>
         </div>
       </main>
+
+      {/* Add Funds Modal */}
+      {showFundModal && (
+        <div className="modal-overlay" onClick={() => setShowFundModal(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Add Funds</h3>
+              <button className="modal-close" onClick={() => setShowFundModal(false)}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </div>
+            <div className="modal-body">
+              <p className="modal-description">
+                Get testnet tokens on Base Sepolia to use the x402 payment system.
+              </p>
+
+              <div className="fund-option">
+                <div className="fund-option-header">
+                  <span className="fund-token">ETH</span>
+                  <span className="fund-network">Base Sepolia</span>
+                </div>
+                <p className="fund-option-desc">Required for gas fees</p>
+                <a
+                  href={FAUCETS.eth}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="fund-link-btn"
+                >
+                  Get ETH from Faucet
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                    <polyline points="15 3 21 3 21 9" />
+                    <line x1="10" y1="14" x2="21" y2="3" />
+                  </svg>
+                </a>
+              </div>
+
+              <div className="fund-option">
+                <div className="fund-option-header">
+                  <span className="fund-token">USDC</span>
+                  <span className="fund-network">Base Sepolia</span>
+                </div>
+                <p className="fund-option-desc">Required for x402 payments</p>
+                <a
+                  href={FAUCETS.usdc}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="fund-link-btn"
+                >
+                  Get USDC from Circle Faucet
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                    <polyline points="15 3 21 3 21 9" />
+                    <line x1="10" y1="14" x2="21" y2="3" />
+                  </svg>
+                </a>
+              </div>
+
+              <div className="fund-wallet-info">
+                <span className="fund-wallet-label">Your wallet address:</span>
+                <code className="fund-wallet-address">{embeddedWallet?.address}</code>
+                <button className="copy-btn" onClick={copyWalletAddress}>
+                  {copied ? (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  ) : (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                    </svg>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
