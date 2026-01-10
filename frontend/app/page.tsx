@@ -335,8 +335,54 @@ export default function Home() {
               <h1>x402</h1>
               <span className="login-badge">ZKID</span>
             </div>
+            <p className="login-tagline">
+              Identity-aware payments, privacy-first.
+            </p>
+
+            <div className="about-section">
+              <div className="about-item">
+                <div className="about-icon">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                  </svg>
+                </div>
+                <div className="about-text">
+                  <strong>Prove who you are, not who you are</strong>
+                  <span>Zero-knowledge proofs verify your email domain without exposing your identity. Only your organizational affiliation is revealed.</span>
+                </div>
+              </div>
+
+              <div className="about-item">
+                <div className="about-icon">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <line x1="12" y1="1" x2="12" y2="23" />
+                    <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+                  </svg>
+                </div>
+                <div className="about-text">
+                  <strong>Dynamic pricing based on identity</strong>
+                  <span>Your verified domain determines your price tier. Enterprises pay more, educational institutions get discounts — all enforced cryptographically.</span>
+                </div>
+              </div>
+
+              <div className="about-item">
+                <div className="about-icon">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="1" y="4" width="22" height="16" rx="2" ry="2" />
+                    <line x1="1" y1="10" x2="23" y2="10" />
+                  </svg>
+                </div>
+                <div className="about-text">
+                  <strong>Seamless x402 payments</strong>
+                  <span>Pay for content with USDC on Base using the HTTP 402 protocol. No accounts, no subscriptions — just pay and access.</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="about-divider" />
+
             <p className="login-description">
-              Authenticate with Google to generate a zero-knowledge proof binding your identity to an embedded wallet.
+              Sign in with Google to generate your ZK proof and start negotiating.
             </p>
             <button className="login-button" onClick={login}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
