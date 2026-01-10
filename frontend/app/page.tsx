@@ -3,7 +3,7 @@
 import { usePrivy, useWallets } from '@privy-io/react-auth'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { generateZKProof, verifyZKProof, ProofData } from '@/lib/zkproof'
-import { sendChatStream } from '@/lib/api'
+import { sendChatStream, unlockData } from '@/lib/api'
 import { makePaymentRequest } from '@/lib/x402client'
 import { getBalances, Balances, FAUCETS } from '@/lib/balance'
 import ReactMarkdown from 'react-markdown'
