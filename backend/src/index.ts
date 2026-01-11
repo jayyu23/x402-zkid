@@ -1,8 +1,8 @@
 import express from 'express'
 import cors from 'cors'
 import dotenv from 'dotenv'
-import { isEduDomain, isOrgDomain, getPrice, canNegotiate } from './lib/zkVerifier'
-import { chat, chatStream } from './lib/anthropic'
+import { getStartingPrice } from './lib/zkVerifier'
+import { runNegotiationAgent, getCurrentPrice, pricingState } from './agent/negotiationAgent'
 import zkidRouter from './zkid/routes'
 
 dotenv.config()
@@ -13,39 +13,129 @@ const PORT = process.env.PORT || 3001
 app.use(cors())
 app.use(express.json())
 
-// Only provide data when user explicitly requests it
-function isExplicitDataRequest(message: string): boolean {
-  const lower = message.toLowerCase().trim()
-  // Only match explicit data requests like "give me the data", "show me the data", "get the data"
-  return /\b(give|show|get|send|provide)\s+(me\s+)?(the\s+)?data\b/i.test(lower)
-}
-
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'x402-zkid-backend' })
 })
 
-// Regular chat - always responds with LLM
-app.post('/chat', async (req, res) => {
-  const { message, domain } = req.body
+// Get current price for a wallet (used by x402 endpoint)
+app.get('/api/price/:walletAddress', (req, res) => {
+  const { walletAddress } = req.params
+  const { domain } = req.query
+
+  if (!walletAddress) {
+    return res.status(400).json({ error: 'Wallet address is required' })
+  }
+
+  const domainStr = (domain as string) || 'unknown'
+  const price = getCurrentPrice(walletAddress, domainStr)
+
+  res.json({
+    walletAddress,
+    domain: domainStr,
+    cents: price.cents,
+    dollars: (price.cents / 100).toFixed(2),
+    round: price.round
+  })
+})
+
+// Agent-based chat endpoint (replaces old /chat/stream)
+app.post('/chat/agent', async (req, res) => {
+  const { message, walletAddress, domain } = req.body
 
   if (!message) {
     return res.status(400).json({ error: 'Message is required' })
   }
 
+  if (!walletAddress) {
+    return res.status(400).json({ error: 'Wallet address is required' })
+  }
+
+  const domainStr = domain || 'unknown'
+
   try {
-    const llmResponse = await chat(message)
-    const requestingData = isExplicitDataRequest(message)
-    const price = getPrice(domain || 'unknown')
+    console.log(`[Agent] Processing message from ${walletAddress} (${domainStr}): "${message}"`)
+
+    const result = await runNegotiationAgent(message, walletAddress, domainStr)
+
+    console.log(`[Agent] Response sent, current price: $${result.currentPrice.dollars}, isDataOffer: ${result.isDataOffer}`)
 
     res.json({
-      response: requestingData ? 'Here is your data. Please pay to unlock.' : llmResponse,
-      hasData: requestingData,
-      ...(requestingData && {
-        dataAvailable: true,
-        price: price.display,
-        cents: price.cents,
-        canNegotiate: canNegotiate(domain || 'unknown')
-      })
+      response: result.response,
+      currentPrice: result.currentPrice,
+      isDataOffer: result.isDataOffer
+    })
+  } catch (error) {
+    console.error('[Agent] Error:', error)
+    res.status(500).json({
+      error: 'Agent failed to process message',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    })
+  }
+})
+
+// Streaming agent chat (SSE version)
+app.post('/chat/stream', async (req, res) => {
+  const { message, walletAddress, domain } = req.body
+
+  if (!message) {
+    return res.status(400).json({ error: 'Message is required' })
+  }
+
+  if (!walletAddress) {
+    return res.status(400).json({ error: 'Wallet address is required' })
+  }
+
+  const domainStr = domain || 'unknown'
+
+  // Set up SSE headers
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+
+  try {
+    console.log(`[Agent Stream] Processing message from ${walletAddress} (${domainStr}): "${message}"`)
+
+    const result = await runNegotiationAgent(message, walletAddress, domainStr)
+
+    // Send the full response as a single SSE event
+    res.write(`data: ${JSON.stringify({
+      text: result.response,
+      currentPrice: result.currentPrice,
+      isDataOffer: result.isDataOffer
+    })}\n\n`)
+
+    res.write(`data: ${JSON.stringify({ done: true })}\n\n`)
+    res.end()
+
+    console.log(`[Agent Stream] Response sent, current price: $${result.currentPrice.dollars}, isDataOffer: ${result.isDataOffer}`)
+  } catch (error) {
+    console.error('[Agent Stream] Error:', error)
+    res.write(`data: ${JSON.stringify({
+      text: 'Sorry, something went wrong. Please try again.',
+      error: true
+    })}\n\n`)
+    res.write(`data: ${JSON.stringify({ done: true })}\n\n`)
+    res.end()
+  }
+})
+
+// Legacy endpoints for backwards compatibility
+app.post('/chat', async (req, res) => {
+  const { message, walletAddress, domain } = req.body
+
+  if (!message) {
+    return res.status(400).json({ error: 'Message is required' })
+  }
+
+  const domainStr = domain || 'unknown'
+  const wallet = walletAddress || 'anonymous'
+
+  try {
+    const result = await runNegotiationAgent(message, wallet, domainStr)
+    res.json({
+      response: result.response,
+      currentPrice: result.currentPrice,
+      isDataOffer: result.isDataOffer
     })
   } catch (error) {
     console.error('Chat error:', error)
@@ -53,86 +143,22 @@ app.post('/chat', async (req, res) => {
   }
 })
 
-// Streaming chat endpoint
-app.post('/chat/stream', async (req, res) => {
-  const { message, domain } = req.body
-
-  if (!message) {
-    return res.status(400).json({ error: 'Message is required' })
-  }
-
-  // Check if this is a data request first
-  const requestingData = isExplicitDataRequest(message)
-
-  if (requestingData) {
-    const price = getPrice(domain || 'unknown')
-    // For data requests, send metadata then close
-    res.setHeader('Content-Type', 'text/event-stream')
-    res.setHeader('Cache-Control', 'no-cache')
-    res.setHeader('Connection', 'keep-alive')
-    res.write(`data: ${JSON.stringify({
-      text: 'Here is your data. Please pay to unlock.',
-      hasData: true,
-      price: price.display,
-      cents: price.cents,
-      canNegotiate: canNegotiate(domain || 'unknown')
-    })}\n\n`)
-    res.write(`data: ${JSON.stringify({ done: true })}\n\n`)
-    res.end()
-    return
-  }
-
-  try {
-    await chatStream(message, res)
-  } catch (error) {
-    console.error('Chat stream error:', error)
-    res.status(500).json({ error: 'Failed to generate response' })
-  }
-})
-
-// Negotiate price - only for edu/org domains
-app.post('/negotiate', async (req, res) => {
-  const { domain, requestedPrice } = req.body
-
-  if (!canNegotiate(domain)) {
-    return res.json({
-      success: false,
-      message: 'Negotiation not available for your domain. Price is fixed.',
-      price: getPrice(domain).display,
-      cents: getPrice(domain).cents
-    })
-  }
-
-  const basePrice = getPrice(domain)
-  const minPrice = isEduDomain(domain) ? 1 : (isOrgDomain(domain) ? 1 : 2)
-  const requested = parseInt(requestedPrice) || basePrice.cents
-
-  if (requested >= minPrice) {
-    return res.json({
-      success: true,
-      message: `Price accepted: ${requested} cent${requested > 1 ? 's' : ''} USDC`,
-      price: `${requested} cent${requested > 1 ? 's' : ''} USDC`,
-      cents: requested
-    })
-  } else {
-    return res.json({
-      success: false,
-      message: `Lowest possible price is ${minPrice} cent USDC for your domain type.`,
-      price: `${minPrice} cent USDC`,
-      cents: minPrice
-    })
-  }
-})
-
 // Unlock/pay for data
 app.post('/unlock', async (req, res) => {
-  const { domain, pricePaid } = req.body
+  const { walletAddress } = req.body
 
-  // Placeholder - in real implementation, verify payment here
+  // Get the negotiated price for this wallet
+  const state = pricingState.get(walletAddress)
+  const pricePaid = state?.cents || 10
+
   res.json({
     success: true,
-    data: 'DATA',
-    message: 'Payment received! Here is your data.'
+    data: 'Here is your premium data! This is the secret information you paid for.',
+    message: `Payment of $${(pricePaid / 100).toFixed(2)} received! Here is your data.`,
+    pricePaid: {
+      cents: pricePaid,
+      dollars: (pricePaid / 100).toFixed(2)
+    }
   })
 })
 
@@ -141,4 +167,5 @@ app.use('/zkid', zkidRouter)
 
 app.listen(PORT, () => {
   console.log(`Backend server running on http://localhost:${PORT}`)
+  console.log(`Negotiation agent ready!`)
 })

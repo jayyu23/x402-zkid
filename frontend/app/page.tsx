@@ -22,7 +22,6 @@ interface Message {
   hasData?: boolean
   price?: string
   cents?: number
-  canNegotiate?: boolean
   unlocked?: boolean
   data?: string
   isStreaming?: boolean
@@ -197,10 +196,14 @@ export default function Home() {
   }
 
   const handleSend = async () => {
-    if (!input.trim() || !zkProof || isLoading) return
+    if (!input.trim() || !zkProof || !embeddedWallet || isLoading) return
 
     const userMessage: Message = { role: 'user', content: input }
-    setMessages((prev) => [...prev, userMessage])
+    // Clear hasData from all previous messages so only the latest can show pay button
+    setMessages((prev) => [
+      ...prev.map(msg => ({ ...msg, hasData: false })),
+      userMessage
+    ])
     setInput('')
     setIsLoading(true)
 
@@ -214,9 +217,10 @@ export default function Home() {
 
     try {
       let streamedContent = ''
-      let dataInfo: { hasData?: boolean; price?: string; cents?: number; canNegotiate?: boolean } = {}
+      let priceInfo: { cents: number; dollars: string } | null = null
+      let showPayButton = false
 
-      await sendChatStream(input, zkProof.domain, (chunk) => {
+      await sendChatStream(input, embeddedWallet.address, zkProof.domain, (chunk) => {
         if (chunk.done) {
           setMessages((prev) =>
             prev.map((msg, i) =>
@@ -224,26 +228,23 @@ export default function Home() {
                 ? {
                     ...msg,
                     isStreaming: false,
-                    hasData: dataInfo.hasData,
-                    price: dataInfo.price,
-                    cents: dataInfo.cents,
-                    canNegotiate: dataInfo.canNegotiate
+                    hasData: showPayButton,
+                    price: priceInfo ? `$${priceInfo.dollars}` : undefined,
+                    cents: priceInfo?.cents
                   }
                 : msg
             )
           )
-          if (dataInfo.hasData && dataInfo.price) {
-            setCurrentPrice({ price: dataInfo.price, cents: dataInfo.cents || 2 })
+          if (priceInfo && showPayButton) {
+            setCurrentPrice({ price: `$${priceInfo.dollars}`, cents: priceInfo.cents })
           }
         } else if (chunk.text) {
-          streamedContent += chunk.text
-          if (chunk.hasData) {
-            dataInfo = {
-              hasData: chunk.hasData,
-              price: chunk.price,
-              cents: chunk.cents,
-              canNegotiate: chunk.canNegotiate
-            }
+          streamedContent = chunk.text
+          if (chunk.currentPrice) {
+            priceInfo = chunk.currentPrice
+          }
+          if (chunk.isDataOffer) {
+            showPayButton = true
           }
           setMessages((prev) =>
             prev.map((msg, i) =>
@@ -269,12 +270,12 @@ export default function Home() {
   }
 
   const handlePay = async (messageIndex: number) => {
-    if (!embeddedWallet || !currentPrice) return
+    if (!embeddedWallet || !currentPrice || !zkProof) return
 
     setIsLoading(true)
     try {
       // Use x402 payment flow with Privy wallet
-      const result = await makePaymentRequest(embeddedWallet)
+      const result = await makePaymentRequest(embeddedWallet, zkProof.domain)
 
       if (result.success && result.data) {
         const responseData = result.data as {
@@ -600,9 +601,6 @@ export default function Home() {
                             >
                               {isLoading ? 'Processing...' : `Pay ${msg.price}`}
                             </button>
-                            {msg.canNegotiate && (
-                              <span className="negotiate-hint">Negotiable</span>
-                            )}
                           </div>
                         )}
                       </div>

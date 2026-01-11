@@ -1,11 +1,13 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'
 
+interface CurrentPrice {
+  cents: number
+  dollars: string
+}
+
 interface ChatResponse {
   response: string
-  hasData?: boolean
-  dataAvailable?: boolean
-  price?: string
-  cents?: number
+  currentPrice?: CurrentPrice
   canNegotiate?: boolean
   error?: string
 }
@@ -13,43 +15,41 @@ interface ChatResponse {
 interface StreamChunk {
   text?: string
   done?: boolean
-  hasData?: boolean
-  price?: string
-  cents?: number
-  canNegotiate?: boolean
-}
-
-interface NegotiateResponse {
-  success: boolean
-  message: string
-  price: string
-  cents: number
+  currentPrice?: CurrentPrice
+  isDataOffer?: boolean
+  error?: boolean
 }
 
 interface UnlockResponse {
   success: boolean
   data: string
   message: string
+  pricePaid?: CurrentPrice
 }
 
-export async function sendChat(message: string, domain: string): Promise<ChatResponse> {
+export async function sendChat(
+  message: string,
+  walletAddress: string,
+  domain: string
+): Promise<ChatResponse> {
   const res = await fetch(`${API_URL}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, domain })
+    body: JSON.stringify({ message, walletAddress, domain })
   })
   return res.json()
 }
 
 export async function sendChatStream(
   message: string,
+  walletAddress: string,
   domain: string,
   onChunk: (chunk: StreamChunk) => void
 ): Promise<void> {
   const res = await fetch(`${API_URL}/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, domain })
+    body: JSON.stringify({ message, walletAddress, domain })
   })
 
   if (!res.ok) {
@@ -83,20 +83,31 @@ export async function sendChatStream(
   }
 }
 
-export async function negotiate(domain: string, requestedPrice: number): Promise<NegotiateResponse> {
-  const res = await fetch(`${API_URL}/negotiate`, {
+export async function unlockData(walletAddress: string): Promise<UnlockResponse> {
+  const res = await fetch(`${API_URL}/unlock`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ domain, requestedPrice })
+    body: JSON.stringify({ walletAddress })
   })
   return res.json()
 }
 
-export async function unlockData(domain: string, pricePaid: number): Promise<UnlockResponse> {
-  const res = await fetch(`${API_URL}/unlock`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ domain, pricePaid })
-  })
-  return res.json()
+// Get current price for a wallet
+export async function getCurrentPrice(
+  walletAddress: string,
+  domain: string
+): Promise<CurrentPrice> {
+  const url = new URL(`${API_URL}/api/price/${walletAddress}`)
+  url.searchParams.set('domain', domain)
+
+  const res = await fetch(url.toString())
+  if (!res.ok) {
+    return { cents: 10, dollars: '0.10' }
+  }
+
+  const data = await res.json()
+  return {
+    cents: data.cents,
+    dollars: data.dollars
+  }
 }

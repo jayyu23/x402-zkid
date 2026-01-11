@@ -65,17 +65,21 @@ export async function createX402Fetch(wallet: ConnectedWallet) {
  */
 export async function makePaymentRequest(
   wallet: ConnectedWallet,
+  domain: string = "unknown",
   url: string = "/api"
 ): Promise<{ success: boolean; data?: unknown; error?: string }> {
   try {
     const fetchWithPayment = await createX402Fetch(wallet);
 
     console.log("[x402] Making payment request to:", url);
+    console.log("[x402] Wallet:", wallet.address, "Domain:", domain);
 
     const response = await fetchWithPayment(url, {
       method: "GET",
       headers: {
         "Content-Type": "application/json",
+        "X-Wallet-Address": wallet.address,
+        "X-Domain": domain,
       },
     });
 

@@ -10,19 +10,55 @@ const cdp = new CdpClient({
   walletSecret: process.env.CDP_WALLET_SECRET!,
 });
 
-// Cache for server initialization
+// Cache for pay-to address only (server is created per-request with dynamic price)
 let payToAddress: string | null = null;
-let httpServer: x402HTTPResourceServer | null = null;
 
-async function initializeServer() {
-  if (httpServer && payToAddress) {
-    return { httpServer, payToAddress };
+// Default price in cents (fallback)
+const DEFAULT_PRICE_CENTS = 10;
+
+// Fetch current price from backend
+async function fetchCurrentPrice(walletAddress: string | null, domain: string | null): Promise<number> {
+  if (!walletAddress) {
+    return DEFAULT_PRICE_CENTS;
+  }
+
+  try {
+    const backendUrl = process.env.BACKEND_URL || "http://localhost:3001";
+    const url = new URL(`${backendUrl}/api/price/${walletAddress}`);
+    if (domain) {
+      url.searchParams.set("domain", domain);
+    }
+
+    const response = await fetch(url.toString(), {
+      cache: "no-store",
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      console.log(`[x402] Fetched price for ${walletAddress}: ${data.cents} cents`);
+      return data.cents || DEFAULT_PRICE_CENTS;
+    }
+  } catch (error) {
+    console.error("[x402] Failed to fetch price from backend:", error);
+  }
+
+  return DEFAULT_PRICE_CENTS;
+}
+
+async function initializePayToAddress(): Promise<string> {
+  if (payToAddress) {
+    return payToAddress;
   }
 
   // Create or get account to receive payments
   const account = await cdp.evm.createAccount();
   payToAddress = account.address;
+  console.log(`[x402] Pay-to address initialized: ${payToAddress}`);
 
+  return payToAddress;
+}
+
+async function createHttpServer(priceInCents: number, payTo: string): Promise<x402HTTPResourceServer> {
   // Initialize facilitator client for Base Sepolia testnet
   const facilitatorClient = new HTTPFacilitatorClient({
     url: "https://x402.org/facilitator",
@@ -34,32 +70,49 @@ async function initializeServer() {
     networks: ["eip155:84532"], // Base Sepolia
   });
 
-  // Define route configuration
+  // Convert cents to dollars string
+  const priceString = `$${(priceInCents / 100).toFixed(2)}`;
+  console.log(`[x402] Creating server with price: ${priceString}`);
+
+  // Define route configuration with dynamic price
   const routesConfig = {
     "GET /api": {
       accepts: [
         {
           scheme: "exact" as const,
-          price: "$0.01",
+          price: priceString,
           network: "eip155:84532" as `${string}:${string}`,
-          payTo: payToAddress,
+          payTo: payTo,
         },
       ],
-      description: "Access to API endpoint",
+      description: "Access to premium data (price negotiable!)",
       mimeType: "application/json",
     },
   };
 
   // Create HTTP resource server
-  httpServer = new x402HTTPResourceServer(resourceServer, routesConfig);
+  const httpServer = new x402HTTPResourceServer(resourceServer, routesConfig);
   await httpServer.initialize();
 
-  return { httpServer, payToAddress };
+  return httpServer;
 }
 
 export async function GET(request: NextRequest) {
   try {
-    const { httpServer } = await initializeServer();
+    // Get wallet address and domain from headers
+    const walletAddress = request.headers.get("X-Wallet-Address");
+    const domain = request.headers.get("X-Domain");
+
+    console.log(`[x402] Request from wallet: ${walletAddress}, domain: ${domain}`);
+
+    // Get pay-to address
+    const payTo = await initializePayToAddress();
+
+    // Fetch current negotiated price for this wallet
+    const priceInCents = await fetchCurrentPrice(walletAddress, domain);
+
+    // Create HTTP server with dynamic price
+    const httpServer = await createHttpServer(priceInCents, payTo);
 
     // Create HTTP adapter for Next.js
     const adapter = {
@@ -97,8 +150,20 @@ export async function GET(request: NextRequest) {
         headers[key] = String(value);
       }
 
+      // Add current price to the response for the client
+      const existingBody = typeof result.response.body === 'object' && result.response.body !== null
+        ? result.response.body
+        : {};
+      const body = {
+        ...existingBody,
+        currentPrice: {
+          cents: priceInCents,
+          dollars: (priceInCents / 100).toFixed(2),
+        },
+      };
+
       return new NextResponse(
-        JSON.stringify(result.response.body),
+        JSON.stringify(body),
         {
           status: result.response.status,
           headers,
@@ -149,15 +214,20 @@ export async function GET(request: NextRequest) {
       // Build response with settlement headers
       const responseData = {
         success: true,
-        message: "Payment settled successfully",
+        message: "Payment settled successfully! Here is your premium data.",
         data: {
           timestamp: new Date().toISOString(),
+          content: "This is the secret premium data you negotiated for!",
         },
         settlement: {
           transactionHash: txHash || null,
           network: network,
           explorerUrl: explorerUrl,
           settled: true,
+          pricePaid: {
+            cents: priceInCents,
+            dollars: (priceInCents / 100).toFixed(2),
+          },
         },
       };
 
