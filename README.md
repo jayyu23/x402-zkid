@@ -1,19 +1,43 @@
-# ZKID Authentication System for x402 Negotiations
+# ZK Payment Negotiator
+
+**Identity-aware payments, privacy-first.**
+
+An AI-powered payment system where your identity determines your price — but your identity stays private.
+
+---
 
 ## Overview
 
-ZKID Auth Server
-- Use Privy to Generate Google OAuth Wallet. Get a JWT, extract the domain information.
-- Run a Zero Knowledge Proof over the JWT to get a downloadable ZK proof that a wallet binds to some domain.
+ZK Payment Negotiator combines zero-knowledge proofs with the HTTP 402 payment protocol to enable privacy-preserving, identity-aware pricing.
 
-x402 Backend API
-- The client will send request for premium resource (eg. a document/endpoint). Server responds with 402. Client will respond with ZKP Auth + the x402 payment payload. Only goes through if the ZKP validation is OK.
-- The backend API keeps a MongoDB Atlas server that keeps track of nonces to prevent replay attacks
-- For testing this should all occur on Base testnet
+Users authenticate with Google and receive a zero-knowledge proof verifying their email domain (e.g., `@stanford.edu`, `@enterprise.com`) without exposing their actual email. This cryptographic proof feeds into an AI negotiation agent that dynamically prices content based on verified organizational affiliation: students get discounts, enterprises pay premium rates, partners unlock special deals.
 
-Extensions:
-- We can then do auth-gated documents (eg. ones that require a particular domain to access), whitelisted/blacklisted domains etc. All done through the MongoDB
-- Do a conversation/inference interface using Fireworks AI. After authing, the user will "negotiate" with the server for a price.
+When a price is agreed, payment settles instantly via the x402 protocol using USDC on Base.
+
+**The server knows *what* you are, never *who* you are.**
+
+---
+
+## How It Works
+
+1. **Authenticate** — Sign in with Google via Privy. An embedded wallet is created for you.
+
+2. **Generate ZK Proof** — A zero-knowledge proof binds your wallet to your email domain without revealing your identity.
+
+3. **Negotiate** — Chat with the AI agent to request premium content. Your verified domain determines your price tier.
+
+4. **Pay & Access** — Accept the offer, pay with USDC via x402, and unlock your content. Transaction settles on-chain.
+
+---
+
+## Tech Stack
+
+- **Frontend**: Next.js, React, TypeScript
+- **Backend**: Express.js, MongoDB Atlas
+- **Authentication**: Privy (Google OAuth + embedded wallets)
+- **ZK Proofs**: Circom, snarkjs, Groth16
+- **Payments**: x402 protocol, USDC on Base Sepolia
+- **AI**: Fireworks AI (Llama 3.1)
 
 ---
 
@@ -35,13 +59,14 @@ Extensions:
 
 ```bash
 cp frontend/.env.example frontend/.env.local
-# Edit frontend/.env.local and add your Privy App ID
+cp backend/.env.example backend/.env
+# Edit both files with your API keys
 ```
 
 ### 3. Run the Project
 
 ```bash
-make          # Install deps and start (uses mock proofs by default)
+make          # Install deps and start
 ```
 
 ### 4. (Optional) Enable Real ZK Proofs
@@ -100,13 +125,16 @@ x402-zkid/
 │   │   ├── layout.tsx    # Root layout
 │   │   └── globals.css   # Styles
 │   ├── lib/
-│   │   └── zkproof.ts    # Dual-mode proof generation
-│   ├── public/zk/        # Circuit artifacts (after make circom)
+│   │   ├── zkproof.ts    # Dual-mode proof generation
+│   │   ├── api.ts        # Backend API client
+│   │   └── x402client.ts # x402 payment client
 │   └── components/
 │       └── Providers.tsx # Privy wrapper
 └── backend/              # Express.js API
     └── src/
-        └── index.ts      # Server
+        ├── index.ts      # Server entry
+        ├── agent/        # AI negotiation agent
+        └── x402/         # Payment handling
 ```
 
 ---
@@ -123,3 +151,9 @@ The ZK proof exposes three public signals:
 ## Ports
 - Frontend: http://localhost:3000
 - Backend: http://localhost:3001
+
+---
+
+## License
+
+MIT
