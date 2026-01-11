@@ -360,6 +360,7 @@ export default function Home() {
               <h1>x402</h1>
               <span className="login-badge">ZKID</span>
             </div>
+            <h2 className="login-title">ZK Payment Negotiator</h2>
             <p className="login-tagline">
               Identity-aware payments, privacy-first.
             </p>

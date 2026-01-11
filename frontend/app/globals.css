@@ -120,9 +120,17 @@ body {
   border-radius: 4px;
 }
 
+.login-title {
+  font-size: 1.75rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 0.5rem;
+  letter-spacing: -0.02em;
+}
+
 .login-tagline {
   font-family: var(--font-serif);
-  font-size: 1.25rem;
+  font-size: 1.1rem;
   font-style: italic;
   color: var(--text-secondary);
   margin-bottom: 2rem;
